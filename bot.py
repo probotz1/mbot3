@@ -2,48 +2,11 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import ffmpeg
 import os
-from pyrogram.errors import FloodWait
-import time
+import subprocess
+import asyncio
 
 # Initialize the bot
 app = Client("my_bot", api_id="28015531", api_hash="2ab4ba37fd5d9ebf1353328fc915ad28", bot_token="7321073695:AAE2ZvYJg6_dQNhEvznmRCSsKMoNHoQWnuI")
-
-# Utilities
-def download_file(client, message):
-    file_id = message.video.file_id if message.video else message.document.file_id
-    file_path = client.download_media(file_id)
-    return file_path
-
-def run_ffmpeg_process(input_path, output_path, process):
-    try:
-        process(input=input_path, output=output_path).run()
-        return output_path
-    except Exception as e:
-        return str(e)
-
-def format_size(size):
-    if size < 1024:
-        return f"{size} B"
-    elif size < 1024**2:
-        return f"{size / 1024:.2f} KB"
-    elif size < 1024**3:
-        return f"{size / 1024**2:.2f} MB"
-    else:
-        return f"{size / 1024**3:.2f} GB"
-
-async def send_progress_message(message, status, file_size=None, progress=None, speed=None, eta=None):
-    progress_bar = "⬢" * int(progress // 2) + "⬡" * int((100 - progress) // 2)
-    status_message = f"""
-    {status}
-
-    ╭━━━━❰ᴘʀᴏɢʀᴇss ʙᴀʀ❱━➣
-    ┣⪼ 🗃️ Sɪᴢᴇ: {file_size} | {file_size}
-    ┣⪼ ⏳️ Dᴏɴᴇ : {progress:.2f}%
-    ┣⪼ 🚀 Sᴩᴇᴇᴅ: {speed}
-    ┣⪼ ⏰️ Eᴛᴀ: {eta}
-    ╰━━━━━━━━━━━━━━━➣
-    """
-    await message.reply_text(status_message)
 
 # Main menu with features
 @app.on_message(filters.command("start"))
@@ -73,28 +36,37 @@ async def start(client, message):
     ])
     await message.reply("Select an option from below 👇", reply_markup=keyboard)
 
+# Utility functions
+async def download_file(client, message):
+    file = await client.download_media(message)
+    return file
+
+def run_ffmpeg_process(command):
+    try:
+        subprocess.run(command, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"FFmpeg process failed: {e}")
+
 # Thumbnail Extractor
 @app.on_callback_query(filters.regex("thumbnail_extractor"))
 async def thumbnail_extractor(client, callback_query):
-    await callback_query.message.edit("Send me a video file to extract thumbnails.")
+    await callback_query.message.edit("Send me a video file to extract a thumbnail.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
-            output_path = "thumbnail.jpg"
-            process = ffmpeg.input(file_path).filter('thumbnail', n=1).output(output_path, vframes=1)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            file_path = await download_file(client, message)
+            output_path = "thumbnail.png"
+            command = f"ffmpeg -i {file_path} -vf thumbnail -frames:v 1 {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Caption and Buttons Editor
-# To be implemented according to your specific needs.
+# To be implemented
 
 # Audio & Subtitles Remover
 @app.on_callback_query(filters.regex("audio_subtitle_remover"))
@@ -104,15 +76,13 @@ async def audio_subtitle_remover(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "output_no_audio.mp4"
-            process = ffmpeg.input(file_path).output(output_path, an=None, sn=None)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -an -sn {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -124,20 +94,18 @@ async def audio_subtitle_extractor(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             audio_output = "output_audio.aac"
             subtitle_output = "output_subtitles.srt"
-            audio_process = ffmpeg.input(file_path).output(audio_output, vn=None)
-            subtitle_process = ffmpeg.input(file_path).output(subtitle_output, vn=None, an=None, map='0:s:0')
-            run_ffmpeg_process(file_path, audio_output, audio_process)
-            run_ffmpeg_process(file_path, subtitle_output, subtitle_process)
+            audio_command = f"ffmpeg -i {file_path} -vn -acodec copy {audio_output}"
+            subtitle_command = f"ffmpeg -i {file_path} -an -vn -scodec copy {subtitle_output}"
+            run_ffmpeg_process(audio_command)
+            run_ffmpeg_process(subtitle_command)
             await message.reply_document(audio_output)
             await message.reply_document(subtitle_output)
             os.remove(file_path)
             os.remove(audio_output)
             os.remove(subtitle_output)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -149,17 +117,15 @@ async def video_trimmer(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
-            start_time = "00:00:30"  # Replace with dynamic time from user input
-            end_time = "00:01:00"  # Replace with dynamic time from user input
+            file_path = await download_file(client, message)
+            start_time = "00:00:30"  # Replace with dynamic input from user
+            end_time = "00:01:00"  # Replace with dynamic input from user
             output_path = "trimmed_video.mp4"
-            process = ffmpeg.input(file_path, ss=start_time, to=end_time).output(output_path)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -ss {start_time} -to {end_time} -c copy {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -171,38 +137,33 @@ async def video_merger(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            video1_path = download_file(client, message)
-            # Wait for the second file upload
-            video2_path = download_file(client, message)
+            video1_path = await download_file(client, message)
+            video2_path = await download_file(client, message)
             output_path = "merged_video.mp4"
-            process = ffmpeg.input(video1_path).input(video2_path).output(output_path)
-            result = run_ffmpeg_process(video1_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {video1_path} -i {video2_path} -filter_complex concat=n=2:v=1:a=0 {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(video1_path)
             os.remove(video2_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Mute Audio in Video File
 @app.on_callback_query(filters.regex("mute_audio"))
 async def mute_audio(client, callback_query):
-    await callback_query.message.edit("Send me a video file to mute audio.")
+    await callback_query.message.edit("Send me a video file to mute the audio.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "muted_video.mp4"
-            process = ffmpeg.input(file_path).output(output_path, an=None)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -an {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -211,21 +172,18 @@ async def mute_audio(client, callback_query):
 async def video_audio_merger(client, callback_query):
     await callback_query.message.edit("Send me the video and audio files to merge.")
 
-    @app.on_message(filters.video)
-    async def handle_video(client, message):
+    @app.on_message(filters.video | filters.audio)
+    async def handle_media(client, message):
         try:
-            video_path = download_file(client, message)
-            # Wait for the audio file upload
-            audio_path = download_file(client, message)
+            media1_path = await download_file(client, message)
+            media2_path = await download_file(client, message)
             output_path = "merged_video_audio.mp4"
-            process = ffmpeg.input(video_path).input(audio_path).output(output_path)
-            result = run_ffmpeg_process(video_path, output_path, process)
-            await message.reply_document(result)
-            os.remove(video_path)
-            os.remove(audio_path)
+            command = f"ffmpeg -i {media1_path} -i {media2_path} -c:v copy -c:a aac {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
+            os.remove(media1_path)
+            os.remove(media2_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -234,21 +192,18 @@ async def video_audio_merger(client, callback_query):
 async def video_subtitle_merger(client, callback_query):
     await callback_query.message.edit("Send me the video and subtitle files to merge.")
 
-    @app.on_message(filters.video)
-    async def handle_video(client, message):
+    @app.on_message(filters.video | filters.document)
+    async def handle_media(client, message):
         try:
-            video_path = download_file(client, message)
-            # Wait for the subtitle file upload
-            subtitle_path = download_file(client, message)
-            output_path = "merged_video_subtitles.mp4"
-            process = ffmpeg.input(video_path).input(subtitle_path).output(output_path)
-            result = run_ffmpeg_process(video_path, output_path, process)
-            await message.reply_document(result)
+            video_path = await download_file(client, message)
+            subtitle_path = await download_file(client, message)
+            output_path = "video_with_subtitles.mp4"
+            command = f"ffmpeg -i {video_path} -i {subtitle_path} -c:v copy -c:a copy -c:s mov_text {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(video_path)
             os.remove(subtitle_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -260,75 +215,69 @@ async def video_to_gif(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
-            output_path = "video.gif"
-            process = ffmpeg.input(file_path).output(output_path, vf="fps=10,scale=320:-1:flags=lanczos")
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            file_path = await download_file(client, message)
+            output_path = "output.gif"
+            command = f"ffmpeg -i {file_path} {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Video Splitter
 @app.on_callback_query(filters.regex("video_splitter"))
 async def video_splitter(client, callback_query):
-    await callback_query.message.edit("Send me a video file to split into parts.")
+    await callback_query.message.edit("Send me a video file and specify duration to split.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
+            duration = "00:00:30"  # Replace with dynamic input from user
             output_path = "split_video.mp4"
-            process = ffmpeg.input(file_path).output(output_path, vf="fps=10,scale=320:-1:flags=lanczos")
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -t {duration} -c copy {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Screenshot Generator
 @app.on_callback_query(filters.regex("screenshot_generator"))
 async def screenshot_generator(client, callback_query):
-    await callback_query.message.edit("Send me a video file to generate screenshots.")
+    await callback_query.message.edit("Send me a video file to generate a screenshot.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "screenshot.png"
-            process = ffmpeg.input(file_path).filter('thumbnail', n=1).output(output_path, vframes=1)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -ss 00:00:01 -vframes 1 {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Manual Screenshot Generator
 @app.on_callback_query(filters.regex("manual_screenshot"))
 async def manual_screenshot(client, callback_query):
-    await callback_query.message.edit("Send me a video file to generate a screenshot manually.")
+    await callback_query.message.edit("Send me a video file and specify the time to capture a screenshot.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
+            timestamp = "00:00:01"  # Replace with dynamic input from user
             output_path = "manual_screenshot.png"
-            process = ffmpeg.input(file_path).filter('select', 'eq(n\,1)').output(output_path, vframes=1)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -ss {timestamp} -vframes 1 {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -340,15 +289,13 @@ async def video_sample_generator(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "video_sample.mp4"
-            process = ffmpeg.input(file_path).output(output_path, t="00:00:10")
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -t 00:00:10 -c copy {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -360,15 +307,13 @@ async def video_to_audio(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
-            output_path = "audio.mp3"
-            process = ffmpeg.input(file_path).output(output_path, vn=None)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            file_path = await download_file(client, message)
+            output_path = "audio_output.mp3"
+            command = f"ffmpeg -i {file_path} -q:a 0 -map a {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -380,35 +325,32 @@ async def video_optimizer(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "optimized_video.mp4"
-            process = ffmpeg.input(file_path).output(output_path, vcodec="libx265", crf=28)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            command = f"ffmpeg -i {file_path} -vf scale=1280:720 -c:v libx264 -crf 23 {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Video Converter
 @app.on_callback_query(filters.regex("video_converter"))
 async def video_converter(client, callback_query):
-    await callback_query.message.edit("Send me a video file to convert to another format.")
+    await callback_query.message.edit("Send me a video file and specify the format to convert to.")
 
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
+            file_path = await download_file(client, message)
             output_path = "converted_video.mp4"
-            process = ffmpeg.input(file_path).output(output_path)
-            result = run_ffmpeg_process(file_path, output_path, process)
-            await message.reply_document(result)
+            format = "mp4"  # Replace with dynamic input from user
+            command = f"ffmpeg -i {file_path} {output_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(output_path)
             os.remove(file_path)
             os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
@@ -420,57 +362,52 @@ async def video_renamer(client, callback_query):
     @app.on_message(filters.video)
     async def handle_video(client, message):
         try:
-            file_path = download_file(client, message)
-            new_name = "new_video_name.mp4"  # Replace with dynamic name from user input
+            file_path = await download_file(client, message)
+            new_name = "renamed_video.mp4"  # Replace with dynamic input from user
             os.rename(file_path, new_name)
             await message.reply_document(new_name)
             os.remove(new_name)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Media Information
 @app.on_callback_query(filters.regex("media_info"))
 async def media_info(client, callback_query):
-    await callback_query.message.edit("Send me a video or audio file to get media information.")
+    await callback_query.message.edit("Send me a media file to get information.")
 
-    @app.on_message(filters.media)
+    @app.on_message(filters.video | filters.audio | filters.document)
     async def handle_media(client, message):
         try:
-            file_path = download_file(client, message)
-            info = ffmpeg.probe(file_path)
-            await message.reply_text(f"Media Info: {info}")
+            file_path = await download_file(client, message)
+            command = f"ffmpeg -i {file_path}"
+            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            await message.reply(result.stdout)
             os.remove(file_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Create Archive File
 @app.on_callback_query(filters.regex("create_archive"))
 async def create_archive(client, callback_query):
-    await callback_query.message.edit("Send me the files you want to include in the archive.")
+    await callback_query.message.edit("Send me the files to create an archive.")
 
     @app.on_message(filters.document)
     async def handle_document(client, message):
         try:
-            file_path = download_file(client, message)
-            output_path = "archive.zip"
-            process = f"zip -r {output_path} {file_path}"
-            os.system(process)
-            await message.reply_document(output_path)
+            file_path = await download_file(client, message)
+            archive_path = "archive.zip"
+            command = f"zip {archive_path} {file_path}"
+            run_ffmpeg_process(command)
+            await message.reply_document(archive_path)
             os.remove(file_path)
-            os.remove(output_path)
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
+            os.remove(archive_path)
         except Exception as e:
             await message.reply(f"An error occurred: {e}")
 
 # Cancel
 @app.on_callback_query(filters.regex("cancel"))
 async def cancel(client, callback_query):
-    await callback_query.message.edit("Operation canceled.")
+    await callback_query.message.edit("Cancelled.")
 
 # Start the bot
 app.run()
