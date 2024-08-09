@@ -1,3 +1,4 @@
 pyrogram
+tqdm
 ffmpeg-python
 tgcrypto
