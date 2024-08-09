@@ -1,4 +1,4 @@
-pyrogram
+pyrogram==1.5.7
+ffmpeg-python==0.2.0
 tqdm
-ffmpeg-python
 tgcrypto
